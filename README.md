@@ -137,7 +137,8 @@ $ python tests/test_modelhawk.py
 PASS  test_detection_and_no_false_positives        # both protocols + the .pt zip
 PASS  test_scanning_never_detonates_payload        # no PWNED.txt after scanning
 PASS  test_scanner_contains_no_unpickling_calls    # AST invariant
-3/3 passed
+PASS  test_classify_global_severity_table          # severity table / false-positive path
+4/4 passed
 ```
 
 ---
@@ -156,7 +157,8 @@ ModelHawk/
 ├─ make_samples.py         # offensive half: crafts harmless malicious samples
 ├─ demo.py                 # craft -> scan -> disassemble, in one command
 ├─ tests/test_modelhawk.py # self-test (both protocols, no-detonation, AST invariant)
-└─ README.md
+├─ README.md
+└─ LICENSE                 # MIT
 ```
 
 ## Limitations & future work (honest scope)
@@ -171,6 +173,10 @@ ModelHawk/
 - Python docs — *"the pickle module is not secure; only unpickle data you trust."*
 - HuggingFace **safetensors** (the safe format) · Protect AI **modelscan** · Trail of Bits **fickling** · **picklescan**
 
+## License
+
+Released under the [MIT License](LICENSE).
+
 ---
 
-*Built as a portfolio project on AI × security supply chain. Author: <your name>.*
+*Built as a portfolio project on AI × security supply chain. Author: Pyhroff.*
