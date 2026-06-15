@@ -3,3 +3,10 @@ __pycache__/
 samples/
 PWNED.txt
 .pytest_cache/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
