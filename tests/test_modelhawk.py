@@ -2,9 +2,11 @@
 """
 Self-test for ModelHawk.
 
-Proves three things that matter:
-  1. Detection works on BOTH pickle opcode paths - protocol 2 (inline GLOBAL)
-     and protocol 5 (STACK_GLOBAL) - plus inside a PyTorch zip wrapper.
+Proves:
+  1. Detection works on ALL supported attack vectors:
+     - Pickle RCE (protocols 2 and 5, raw and zip-wrapped .pt)
+     - Unsafe YAML (!!python/object/apply and friends)
+     - Numpy object arrays (hand-crafted .npy + real numpy if available)
   2. Benign and safetensors files are NOT false-flagged.
   3. SAFETY: scanning never executes a payload (no PWNED.txt is ever created),
      and the scanner source contains no unpickling calls.
@@ -14,8 +16,10 @@ Run directly:
 or with pytest:
     pytest tests/
 """
+import ast
 import os
 import pathlib
+import pickle
 import sys
 import tempfile
 
@@ -45,13 +49,19 @@ def test_detection_and_no_false_positives():
             elif name.endswith(".safetensors"):
                 assert rep.verdict == "SAFE", f"{name} should be SAFE, got {rep.verdict}"
 
-        # Both protocols must independently trip the scanner.
+        # Pickle: both protocols must independently trip the scanner.
         assert reports["malicious_os_system.p2.pkl"].verdict == "CRITICAL"
         assert reports["malicious_os_system.p5.pkl"].verdict == "CRITICAL"
         assert reports["malicious_exec.p2.pkl"].verdict == "CRITICAL"
         assert reports["malicious_exec.p5.pkl"].verdict == "CRITICAL"
         # The zip-wrapped .pt must be unwrapped and flagged.
         assert reports["malicious_pytorch_model.pt"].verdict == "CRITICAL"
+        # YAML attack vector.
+        assert reports["malicious_config.yaml"].verdict == "CRITICAL"
+        assert reports["benign_config.yaml"].verdict == "SAFE"
+        # Numpy object-array attack vector.
+        assert reports["malicious_object_array.npy"].verdict == "CRITICAL"
+        assert reports["benign_float_array.npy"].verdict == "SAFE"
 
 
 def test_scanning_never_detonates_payload():
@@ -72,11 +82,7 @@ def test_scanning_never_detonates_payload():
 
 
 def test_scanner_contains_no_unpickling_calls():
-    """AST-level invariant: the scanner never imports `pickle` or calls
-    load / loads / Unpickler. We inspect the parse tree, not raw text, so
-    mentions in docstrings or comments don't count - only real code does."""
-    import ast
-
+    """AST-level invariant: the scanner never imports pickle or calls load/loads/Unpickler."""
     src = pathlib.Path(modelhawk.__file__).read_text(encoding="utf-8")
     bad = []
     for node in ast.walk(ast.parse(src)):
@@ -98,29 +104,92 @@ def test_scanner_contains_no_unpickling_calls():
 
 
 def test_classify_global_severity_table():
-    """Lock in the severity mapping the README advertises - including the
-    benign-ML-prefix and 'unrecognized import' branches that the sample corpus
-    alone never exercises (real models hit exactly these paths)."""
+    """Lock in the severity mapping the README advertises."""
     cases = {
-        # expected ML machinery -> INFO (benign)
         ("torch._utils", "_rebuild_tensor_v2"): "INFO",
         ("numpy.core.multiarray", "_reconstruct"): "INFO",
         ("collections", "OrderedDict"): "INFO",
-        # code / process execution -> CRITICAL (os family, subprocess, builtins,
-        # and the protocol-2 '__builtin__' legacy name)
         ("nt", "system"): "CRITICAL",
         ("posix", "system"): "CRITICAL",
         ("subprocess", "Popen"): "CRITICAL",
         ("builtins", "eval"): "CRITICAL",
         ("__builtin__", "exec"): "CRITICAL",
-        # network / dynamic-import capability -> HIGH
         ("socket", "socket"): "HIGH",
-        # unknown third-party import -> MEDIUM (manual review, does not fail CI)
         ("some_random_pkg", "Thing"): "MEDIUM",
     }
     for (module, name), expected in cases.items():
         sev, _reason = modelhawk.classify_global(module, name)
         assert sev == expected, f"{module}.{name}: expected {expected}, got {sev}"
+
+
+def test_yaml_detection():
+    """YAML scanning catches all dangerous PyYAML tags and ignores benign YAML."""
+    cases_critical = [
+        b"payload: !!python/object/apply:os.system ['echo pwned']\n",
+        b"x: !!python/object/new:subprocess.Popen\n  - ['sh', '-c', 'id']\n",
+    ]
+    cases_high = [
+        b"obj: !!python/object:os.stat_result {}\n",
+        b"mod: !!python/module:os\n",
+    ]
+    cases_safe = [
+        b"model:\n  layers: 10\n  lr: 0.001\n",
+        b"# just a comment\nname: resnet50\n",
+        b"",
+    ]
+    for data in cases_critical:
+        stream = modelhawk.scan_yaml_bytes(data)
+        assert stream.severity == "CRITICAL", f"expected CRITICAL for {data!r}, got {stream.severity}"
+    for data in cases_high:
+        stream = modelhawk.scan_yaml_bytes(data)
+        assert stream.severity == "HIGH", f"expected HIGH for {data!r}, got {stream.severity}"
+    for data in cases_safe:
+        stream = modelhawk.scan_yaml_bytes(data)
+        assert stream.severity == "SAFE", f"expected SAFE for {data!r}, got {stream.severity}"
+
+
+def test_npy_object_array_handcrafted():
+    """Hand-crafted .npy with malicious pickle payload must be CRITICAL (no numpy needed)."""
+    class _Payload:
+        def __reduce__(self):
+            import os as _os
+            return (_os.system, ("echo pwned",))
+
+    pkl = pickle.dumps([_Payload()], protocol=3)
+    npy_data = make_samples._make_npy_bytes(pkl)
+    stream = modelhawk.scan_npy_bytes(npy_data)
+    assert stream.severity == "CRITICAL", f"expected CRITICAL, got {stream.severity}"
+
+
+def test_npy_float_array_safe():
+    """Non-object .npy (numeric dtype) must be SAFE — no pickle, no risk."""
+    npy_data = make_samples._make_benign_npy_bytes()
+    stream = modelhawk.scan_npy_bytes(npy_data)
+    assert stream.severity == "SAFE", f"expected SAFE, got {stream.severity}"
+
+
+def test_npy_real_numpy_object_array():
+    """Use real numpy (if installed) to write a malicious object array and detect it."""
+    try:
+        import numpy as np
+    except ImportError:
+        print("SKIP  test_npy_real_numpy_object_array (numpy not installed)")
+        return
+
+    class _RealPayload:
+        def __reduce__(self):
+            import os as _os
+            return (_os.system, ("echo pwned",))
+
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "model_data.npy")
+        arr = np.array([_RealPayload()], dtype=object)
+        np.save(path, arr, allow_pickle=True)
+        rep = modelhawk.scan_file(path)
+        assert rep.verdict == "CRITICAL", (
+            f"real numpy object array not flagged — got {rep.verdict}. "
+            f"Findings: {[f.target for s in rep.streams for f in s.findings]}"
+        )
 
 
 if __name__ == "__main__":
@@ -129,6 +198,10 @@ if __name__ == "__main__":
         test_scanning_never_detonates_payload,
         test_scanner_contains_no_unpickling_calls,
         test_classify_global_severity_table,
+        test_yaml_detection,
+        test_npy_object_array_handcrafted,
+        test_npy_float_array_safe,
+        test_npy_real_numpy_object_array,
     ]
     failed = 0
     for fn in tests:
