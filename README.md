@@ -4,6 +4,9 @@
 
 > A `.pt` / `.bin` / `.pkl` model file is not data — it's a program. ModelHawk reads the program and tells you if it bites.
 
+[Write-up on Medium](https://medium.com/@praisingharris/i-built-a-malware-scanner-for-ai-models-heres-what-i-found-acaca5200c99)
+
+
 ---
 
 ## The 30-second pitch
