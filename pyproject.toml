@@ -35,8 +35,8 @@ dependencies = []
 modelhawk = "modelhawk:main"
 
 [project.urls]
-Repository = "https://github.com/your-username/ModelHawk"
-Issues = "https://github.com/your-username/ModelHawk/issues"
+Repository = "https://github.com/Pyhroff/ModelHawk"
+Issues = "https://github.com/Pyhroff/ModelHawk/issues"
 
 [tool.setuptools]
 py-modules = ["modelhawk"]
