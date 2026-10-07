@@ -39,6 +39,19 @@ Pickle that object into a `.pkl` (or drop it inside a `.pt` zip as `data.pkl`) a
 
 ---
 
+## Detection coverage
+
+ModelHawk currently checks three serialization/configuration surfaces without deserializing the input:
+
+| Surface | Formats | Detection approach | Current status |
+|---|---|---|---|
+| Pickle code execution | `.pkl`, `.pickle`, `.pt`, `.pth`, `.ckpt`, `.bin`, `.joblib`, `.dill`, `.model` | Static opcode analysis with `pickletools`; dangerous globals and invocation opcodes are classified by severity | Implemented |
+| Unsafe PyYAML tags | `.yaml`, `.yml` | Byte-level detection of `!!python/*` tags commonly associated with unsafe loaders | Implemented |
+| NumPy object arrays | `.npy`, object arrays inside `.npz` | Parses the NumPy header and statically inspects the embedded pickle when the dtype is object | Implemented |
+| Safe tensor containers | `.safetensors` | Recognizes the non-pickle container and reports no pickle execution path | Implemented |
+
+This is **static detection, not proof of safety**. A SAFE result means the scanner did not identify a supported dangerous pattern; it does not establish that arbitrary downstream parsers, custom loaders, native extensions, or application code are safe.
+
 ## What ModelHawk looks at
 
 It walks the opcode stream with the stdlib **`pickletools`** (a pure parser — no deserialization) and flags:
