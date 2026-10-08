@@ -188,6 +188,15 @@ ModelHawk/
 - Python docs — *"the pickle module is not secure; only unpickle data you trust."*
 - HuggingFace **safetensors** (the safe format) · Protect AI **modelscan** · Trail of Bits **fickling** · **picklescan**
 
+
+
+## Security research & evaluation
+
+- [Threat model](docs/THREAT_MODEL.md)
+- [Evaluation methodology](docs/EVALUATION.md)
+
+ModelHawk treats the **no-deserialization invariant** as a first-class security property: the scanner should inspect hostile artifacts without executing them. Benchmarks therefore cover both detection quality and scanner safety.
+
 ## License
 
 Released under the [MIT License](LICENSE).
