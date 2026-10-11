@@ -321,7 +321,7 @@ def _parse_npy_header(data: bytes) -> tuple[str, int]:
 
     raw_hdr = data[hdr_start:data_start]
     try:
-        header = ast.literal_eval(raw_hdr.decode(encoding).strip().rstrip("\\x00").rstrip())
+        header = ast.literal_eval(raw_hdr.decode(encoding).strip().rstrip("\x00").rstrip())
     except (UnicodeDecodeError, SyntaxError, ValueError) as exc:
         raise ValueError(f"invalid numpy .npy header: {exc}") from exc
     if not isinstance(header, dict) or not isinstance(header.get("descr"), str):
