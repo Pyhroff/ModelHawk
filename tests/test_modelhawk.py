@@ -22,6 +22,7 @@ import pathlib
 import pickle
 import sys
 import tempfile
+import zipfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
@@ -192,6 +193,40 @@ def test_npy_real_numpy_object_array():
         )
 
 
+def test_zip_member_resource_limits():
+    """ZIP scanning must bound decompression and report limit hits as suspicious."""
+    old_member_limit = modelhawk._MAX_ARCHIVE_MEMBER_BYTES
+    old_total_limit = modelhawk._MAX_ARCHIVE_TOTAL_BYTES
+    old_count_limit = modelhawk._MAX_ARCHIVE_MEMBERS
+    try:
+        modelhawk._MAX_ARCHIVE_MEMBER_BYTES = 32
+        modelhawk._MAX_ARCHIVE_TOTAL_BYTES = 48
+        modelhawk._MAX_ARCHIVE_MEMBERS = 100
+        with tempfile.TemporaryDirectory() as d:
+            oversized = os.path.join(d, "oversized.zip")
+            with zipfile.ZipFile(oversized, "w", compression=zipfile.ZIP_DEFLATED) as z:
+                z.writestr("huge.pt", b"A" * 128)
+            report = modelhawk.scan_file(oversized)
+            assert report.verdict == "MEDIUM", (
+                f"oversized ZIP member must be suspicious, got {report.verdict}"
+            )
+            assert any("archive-limit:member-size" in s.label for s in report.streams)
+
+            aggregate = os.path.join(d, "aggregate.zip")
+            with zipfile.ZipFile(aggregate, "w", compression=zipfile.ZIP_STORED) as z:
+                z.writestr("first.bin", b"A" * 24)
+                z.writestr("second.bin", b"B" * 32)
+            report = modelhawk.scan_file(aggregate)
+            assert report.verdict == "MEDIUM", (
+                f"aggregate ZIP limit must be suspicious, got {report.verdict}"
+            )
+            assert any("archive-limit:total-size" in s.label for s in report.streams)
+    finally:
+        modelhawk._MAX_ARCHIVE_MEMBER_BYTES = old_member_limit
+        modelhawk._MAX_ARCHIVE_TOTAL_BYTES = old_total_limit
+        modelhawk._MAX_ARCHIVE_MEMBERS = old_count_limit
+
+
 if __name__ == "__main__":
     tests = [
         test_detection_and_no_false_positives,
@@ -202,6 +237,7 @@ if __name__ == "__main__":
         test_npy_object_array_handcrafted,
         test_npy_float_array_safe,
         test_npy_real_numpy_object_array,
+        test_zip_member_resource_limits,
     ]
     failed = 0
     for fn in tests:
