@@ -221,6 +221,18 @@ def test_zip_member_resource_limits():
                 f"aggregate ZIP limit must be suspicious, got {report.verdict}"
             )
             assert any("archive-limit:total-size" in s.label for s in report.streams)
+
+            modelhawk._MAX_ARCHIVE_TOTAL_BYTES = 1024
+            modelhawk._MAX_ARCHIVE_MEMBERS = 1
+            count_limited = os.path.join(d, "count-limited.zip")
+            with zipfile.ZipFile(count_limited, "w", compression=zipfile.ZIP_STORED) as z:
+                z.writestr("one.bin", b"A")
+                z.writestr("two.bin", b"B")
+            report = modelhawk.scan_file(count_limited)
+            assert report.verdict == "MEDIUM", (
+                f"archive member-count limit must be suspicious, got {report.verdict}"
+            )
+            assert any("archive-limit:member-count" in s.label for s in report.streams)
     finally:
         modelhawk._MAX_ARCHIVE_MEMBER_BYTES = old_member_limit
         modelhawk._MAX_ARCHIVE_TOTAL_BYTES = old_total_limit
