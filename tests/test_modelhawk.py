@@ -174,7 +174,7 @@ def test_npy_header_bounds_and_versions():
     import struct
 
     # Truncated version and length fields must fail closed.
-    for data in (b"\\x93NUMPY", b"\\x93NUMPY\\x01\\x00\\x05"):
+    for data in (b"\x93NUMPY", b"\x93NUMPY\x01\x00\x05"):
         try:
             modelhawk._parse_npy_header(data)
         except ValueError:
@@ -184,7 +184,7 @@ def test_npy_header_bounds_and_versions():
 
     # An attacker-controlled length must be rejected before header parsing.
     oversized = (
-        b"\\x93NUMPY\\x02\\x00"
+        b"\x93NUMPY\x02\x00"
         + struct.pack("<I", modelhawk._MAX_NPY_HEADER_BYTES + 1)
     )
     try:
@@ -195,11 +195,11 @@ def test_npy_header_bounds_and_versions():
         raise AssertionError("oversized NPY header accepted")
 
     # Version 3 headers use UTF-8; a valid small header must still parse.
-    header = b"{'descr': '<f4', 'fortran_order': False, 'shape': (1,), }\\n"
-    v3 = b"\\x93NUMPY\\x03\\x00" + struct.pack("<I", len(header)) + header + b"\\x00\\x00\\x80?"
+    header = b"{'descr': '<f4', 'fortran_order': False, 'shape': (1,), }\n"
+    v3 = b"\x93NUMPY\x03\x00" + struct.pack("<I", len(header)) + header + b"\x00\x00\x80?"
     dtype, offset = modelhawk._parse_npy_header(v3)
     assert dtype == "<f4"
-    assert v3[offset:] == b"\\x00\\x00\\x80?"
+    assert v3[offset:] == b"\x00\x00\x80?"
 
 
 def test_npy_real_numpy_object_array():
