@@ -369,15 +369,48 @@ def scan_npy_bytes(data: bytes, label: str = "<npy>") -> "StreamReport":
     return stream
 
 
+# Resource limits for untrusted ZIP/NPZ containers. Oversized entries are
+# surfaced as parse errors (MEDIUM) instead of silently skipped.
+_MAX_ARCHIVE_MEMBERS = 10_000
+_MAX_ARCHIVE_MEMBER_BYTES = 64 * 1024 * 1024
+_MAX_ARCHIVE_TOTAL_BYTES = 256 * 1024 * 1024
+_ARCHIVE_LIMIT_SENTINEL = b""
+
 def iter_pickle_streams(path: str):
-    """Yield (label, bytes) for each pickle stream in a file or zip container."""
+    """Yield (label, bytes) for each pickle stream in a file or zip container.
+
+    ZIP metadata is untrusted. Bound entry count, each decompressed member, and
+    total bytes read; never call ZipFile.read(), which materializes an entire
+    member before the scanner can enforce a limit. Limit violations produce a
+    malformed-stream sentinel so scan_file reports MEDIUM rather than SAFE.
+    """
     if zipfile.is_zipfile(path):
         try:
             with zipfile.ZipFile(path) as z:
-                for info in z.infolist():
+                total_read = 0
+                for index, info in enumerate(z.infolist()):
                     if info.is_dir():
                         continue
-                    raw = z.read(info)
+                    if index >= _MAX_ARCHIVE_MEMBERS:
+                        yield "[archive-limit:member-count]", _ARCHIVE_LIMIT_SENTINEL
+                        break
+                    if info.file_size > _MAX_ARCHIVE_MEMBER_BYTES:
+                        yield f"{info.filename}[archive-limit:member-size]", _ARCHIVE_LIMIT_SENTINEL
+                        continue
+                    remaining = _MAX_ARCHIVE_TOTAL_BYTES - total_read
+                    if info.file_size > remaining:
+                        yield f"{info.filename}[archive-limit:total-size]", _ARCHIVE_LIMIT_SENTINEL
+                        break
+                    try:
+                        with z.open(info, "r") as member:
+                            raw = member.read(min(_MAX_ARCHIVE_MEMBER_BYTES, remaining) + 1)
+                    except Exception:
+                        yield f"{info.filename}[archive-read-error]", _ARCHIVE_LIMIT_SENTINEL
+                        continue
+                    if len(raw) > _MAX_ARCHIVE_MEMBER_BYTES or len(raw) > remaining:
+                        yield f"{info.filename}[archive-limit:decompressed-size]", _ARCHIVE_LIMIT_SENTINEL
+                        break
+                    total_read += len(raw)
                     name_lower = info.filename.lower()
                     if name_lower.endswith(_PICKLEISH_NAMES) or _looks_like_pickle(raw):
                         yield info.filename, raw
@@ -387,7 +420,7 @@ def iter_pickle_streams(path: str):
                         if pkl is not None:
                             yield f"{info.filename}[object-array]", pkl
         except zipfile.BadZipFile:
-            return
+            yield "[archive-read-error]", _ARCHIVE_LIMIT_SENTINEL
         return
     with open(path, "rb") as f:
         yield "<pickle>", f.read()
