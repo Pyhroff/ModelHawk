@@ -374,7 +374,7 @@ def iter_pickle_streams(path: str):
                     try:
                         with z.open(info, "r") as member:
                             raw = member.read(min(_MAX_ARCHIVE_MEMBER_BYTES, remaining) + 1)
-                    except (OSError, RuntimeError, zipfile.BadZipFile, EOFError):
+                    except Exception:
                         yield f"{info.filename}[archive-read-error]", _ARCHIVE_LIMIT_SENTINEL
                         continue
                     if len(raw) > _MAX_ARCHIVE_MEMBER_BYTES or len(raw) > remaining:
