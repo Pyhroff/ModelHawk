@@ -283,20 +283,50 @@ def scan_yaml_bytes(data: bytes, label: str = "<yaml>") -> "StreamReport":
 # Numpy .npy scanning
 # --------------------------------------------------------------------------- #
 
+# Reject hostile or corrupt headers before decoding/parsing them. NumPy's
+# format uses a small Python-literal dictionary; a 1 MiB ceiling is generous
+# for real headers while bounding work on untrusted artifacts.
+_MAX_NPY_HEADER_BYTES = 1 << 20
+
+
 def _parse_npy_header(data: bytes) -> tuple[str, int]:
-    """Return (dtype_str, data_start_offset). Raises ValueError on bad files."""
-    if not data.startswith(_NPY_MAGIC):
-        raise ValueError("missing numpy .npy magic bytes")
-    major = data[6]
+    """Return (dtype_str, data_start_offset); reject malformed/oversized headers."""
+    if len(data) < 8 or not data.startswith(_NPY_MAGIC):
+        raise ValueError("missing or truncated numpy .npy magic/version bytes")
+
+    major, minor = data[6], data[7]
     if major == 1:
-        header_len = int.from_bytes(data[8:10], "little")
-        hdr_start, data_start = 10, 10 + header_len
-    else:  # v2+: 4-byte header length field
-        header_len = int.from_bytes(data[8:12], "little")
-        hdr_start, data_start = 12, 12 + header_len
+        length_start, length_size, hdr_start = 8, 2, 10
+        encoding = "latin-1"
+    elif major in (2, 3):
+        length_start, length_size, hdr_start = 8, 4, 12
+        encoding = "utf-8" if major == 3 else "latin-1"
+    else:
+        raise ValueError(f"unsupported numpy .npy format version {major}.{minor}")
+
+    if len(data) < hdr_start:
+        raise ValueError("truncated numpy .npy header-length field")
+
+    header_len = int.from_bytes(data[length_start:length_start + length_size], "little")
+    if header_len <= 0:
+        raise ValueError("empty numpy .npy header")
+    if header_len > _MAX_NPY_HEADER_BYTES:
+        raise ValueError(
+            f"numpy .npy header exceeds {_MAX_NPY_HEADER_BYTES} byte safety limit"
+        )
+
+    data_start = hdr_start + header_len
+    if data_start > len(data):
+        raise ValueError("truncated numpy .npy header body")
+
     raw_hdr = data[hdr_start:data_start]
-    header = ast.literal_eval(raw_hdr.decode("latin-1").strip().rstrip("\x00").rstrip())
-    return header.get("descr", ""), data_start
+    try:
+        header = ast.literal_eval(raw_hdr.decode(encoding).strip().rstrip("\\x00").rstrip())
+    except (UnicodeDecodeError, SyntaxError, ValueError) as exc:
+        raise ValueError(f"invalid numpy .npy header: {exc}") from exc
+    if not isinstance(header, dict) or not isinstance(header.get("descr"), str):
+        raise ValueError("numpy .npy header must contain a string 'descr' field")
+    return header["descr"], data_start
 
 
 def _npy_extract_pickle(data: bytes):
