@@ -235,6 +235,7 @@ if __name__ == "__main__":
         test_yaml_detection,
         test_npy_object_array_handcrafted,
         test_npy_float_array_safe,
+        test_npy_header_bounds_and_versions,
         test_npy_real_numpy_object_array,
     ]
     failed = 0
