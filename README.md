@@ -1,5 +1,7 @@
 # ModelHawk
 
+[![CI](https://github.com/Pyhroff/ModelHawk/actions/workflows/ci.yml/badge.svg)](https://github.com/Pyhroff/ModelHawk/actions/workflows/ci.yml)
+
 **A static malware scanner for serialized ML models — it detects code-execution backdoors hidden inside PyTorch / pickle model files *without* running them.**
 
 > A `.pt` / `.bin` / `.pkl` model file is not data — it's a program. ModelHawk reads the program and tells you if it bites.
