@@ -74,6 +74,28 @@ Each imported global is scored by a **severity table** (full lists in `modelhawk
 
 > **Design note — low false positives by construction.** Real models routinely pickle references to their *own* custom classes (`GLOBAL mymodel MyNet`). Those land as **MEDIUM "manual review,"** and because the CI gate defaults to `--fail-on HIGH`, legitimate models with custom classes **pass cleanly** — you get the signal without the false alarm. Only genuine code-execution sinks (`os`/`subprocess`/`builtins.exec`/…) reach CRITICAL and fail the build.
 
+### Scan pipeline
+
+```mermaid
+flowchart TD
+    P["path(s)"] --> GP["gather_paths<br/>(recurse, pick model files)"]
+    GP --> SF{"scan_file<br/>by extension / magic"}
+    SF -->|".safetensors"| ST["SAFE<br/>(no pickle, no code path)"]
+    SF -->|".yaml / .yml"| Y["scan_yaml_bytes<br/>(python/* tags)"]
+    SF -->|".npy"| N["scan_npy_bytes<br/>(object arrays embed a pickle)"]
+    SF -->|"pickle / zip (.pt, .bin, .npz)"| IT["iter_pickle_streams<br/>(bounded member count and size)"]
+    IT --> SP["scan_pickle_bytes<br/>(opcode walk, never unpickles)"]
+    SP --> CG["classify_global<br/>(dangerous callables)"]
+    Y --> V["verdict per file<br/>(worst stream wins)"]
+    N --> V
+    CG --> V
+    ST --> V
+    V --> R["print_reports / --json<br/>(--disasm for opcodes)"]
+    R --> X{"--fail-on<br/>threshold"}
+    X -->|"met"| E1["exit non-zero"]
+    X -->|"not met"| E0["exit 0"]
+```
+
 ### Two subtleties that bite people who reason from memory
 
 ModelHawk handles both because they were verified empirically, not assumed:
@@ -104,6 +126,10 @@ Useful flags: `--disasm` (full opcode dump for flagged files), `--json`, `--quie
 ---
 
 ## Example output
+
+![terminal demo: modelhawk samples --no-color](docs/assets/demo.svg)
+
+_Real output of `modelhawk.py samples --no-color` after `python demo.py` crafted the samples (ANSI stripped; exits 1 because CRITICAL findings exist). Paths show `posix.system` because this run was on Linux._
 
 Scanning the crafted corpus (`python demo.py`):
 
