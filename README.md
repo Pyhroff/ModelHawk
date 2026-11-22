@@ -181,7 +181,13 @@ PASS  test_detection_and_no_false_positives        # both protocols + the .pt zi
 PASS  test_scanning_never_detonates_payload        # no PWNED.txt after scanning
 PASS  test_scanner_contains_no_unpickling_calls    # AST invariant
 PASS  test_classify_global_severity_table          # severity table / false-positive path
-4/4 passed
+PASS  test_yaml_detection
+PASS  test_npy_object_array_handcrafted
+PASS  test_npy_float_array_safe
+PASS  test_npy_header_bounds_and_versions
+PASS  test_npy_real_numpy_object_array
+PASS  test_zip_member_resource_limits
+10/10 passed
 ```
 
 ---
