@@ -1,0 +1,2 @@
+[console_scripts]
+modelhawk = modelhawk:main
