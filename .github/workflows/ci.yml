@@ -17,9 +17,12 @@ jobs:
       matrix:
         include:
           # ubuntu-latest (26.04) no longer ships Python 3.9; keep testing it on 24.04 while pyproject declares it.
+          # (3.8, also declared, passes locally but has no hosted runner image left.)
           - python-version: "3.9"
             os: ubuntu-24.04
           - python-version: "3.12"
+            os: ubuntu-latest
+          - python-version: "3.14"
             os: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
